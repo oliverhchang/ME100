@@ -1,0 +1,79 @@
+"""
+ESP32 Servo Test Sketch (in MicroPython)
+
+This script moves a servo motor to its 0-degree position (clockwise)
+and holds it there.
+"""
+
+# 1. Import the necessary libraries
+from machine import Pin, PWM  # PWM is for controlling the servo
+import time                 # For sleep (delay)
+
+# 2. Define the GPIO pin the servo's signal wire is connected to
+#    GPIO 26 is another great choice.
+SERVO_PIN = 25
+
+# 3. Set up the PWM signal
+#    Servos run on a 50Hz (50 times per second) signal.
+#    This creates a PWM object on the servo pin with a 50Hz frequency.
+servo_pwm = PWM(Pin(SERVO_PIN), freq=50)
+
+"""
+How this works (a quick explanation):
+Servos are controlled by the *width* of a pulse, not just voltage.
+- A 1 millisecond (ms) pulse = 0 degrees
+- A 2 millisecond (ms) pulse = 180 degrees
+- A 1.5 millisecond (ms) pulse = 90 degrees
+
+MicroPython's `duty_ns()` lets us set this pulse width in nanoseconds (ns).
+- 1ms = 1,000,000 ns
+- 2ms = 2,000,000 ns
+"""
+
+def set_servo_angle(angle):
+    """
+    Moves the servo to a specific angle (0-180 degrees).
+    """
+    if angle < 0:
+        angle = 0
+    if angle > 180:
+        angle = 180
+        
+    # 4. Convert the angle (0-180) into a pulse width.
+    #    The standard 1ms-2ms (1,000,000ns - 2,000,000ns) range
+    #    doesn't work for all servos.
+    #    We are changing it to a wider 0.5ms-2.5ms range
+    #    (500,000ns - 2,500,000ns) which gives full motion
+    #    on most hobby servos.
+    #    
+    #    Old line:
+    #    pulse_width_ns = int(1_000,000 + (angle / 180) * 1_000,000)
+    #
+    #    New line:
+    pulse_width_ns = int(500_000 + (angle / 180) * 2_000_000)
+    
+    # 5. Send the command to the servo
+    servo_pwm.duty_ns(pulse_width_ns)
+
+
+# --- Main Program Execution ---
+
+try:
+    print("Servo Test Starting...")
+    
+    print("Moving servo to 0 degrees (clockwise)...")
+    set_servo_angle(0) # Move to 0 degrees
+    time.sleep(2)      # Wait 2 seconds for it to get there
+    
+    print("Move complete. Servo is at 0 degrees and holding.")
+
+except KeyboardInterrupt:
+    # Clean up gracefully if you press Ctrl+C in Thonny
+    print("Program stopped. Releasing servo.")
+    servo_pwm.deinit() # Turn off the PWM signal
+    
+# We removed the 'finally:' block.
+# This means the servo will KEEP holding its 0-degree
+# position after the script finishes, instead of
+# going limp and springing back.
+# It will only release when you press Ctrl+C.
