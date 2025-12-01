@@ -1,13 +1,14 @@
-// File: code_Top_ESP32_Main.ino
+// File: code_Main_ESP32_Machine.ino
 
 #include <esp_now.h>
 #include <WiFi.h>
 #include "shared_struct.h" // Our shared command list
 
-// *** REPLACE WITH YOUR BOTTOM ESP32's MAC ADDRESS ***
-uint8_t bottomEsp32Address[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+// === 1. GLOBAL SETTINGS (Set by Remote) ===
+int targetRiceType = 1;
+float targetPortionGrams = 150.0;
 
-// === 1. DEFINE YOUR STATE MACHINE ===
+// === 2. DEFINE YOUR STATE MACHINE ===
 typedef enum {
   IDLE,
   DISPENSING_RICE,
@@ -22,66 +23,73 @@ SystemState currentState = IDLE;
 int washCycleCounter = 0;
 const int MAX_WASH_CYCLES = 2; // How many times to wash?
 
-// === 2. HARDWARE STUBS (Your code goes here) ===
-// --- Silo ---
+// === 3. HARDWARE STUBS (Your code goes here) ===
+// --- Silos (Actuators) ---
 void openSilo(int siloNumber) { Serial.printf(">>> ACTION: Opening silo %d\n", siloNumber); }
 void closeSilo(int siloNumber) { Serial.printf(">>> ACTION: Closing silo %d\n", siloNumber); }
+// --- Silos (Sensors) ---
 float getRiceLevel(int siloNumber) { Serial.println(">>> SENSOR: Reading ultrasonic"); return 50.0; /* 50% full */ }
 
-// --- Washing Basin ---
+// --- Washing Basin (Actuators) ---
 void startStirrer() { Serial.println(">>> ACTION: Starting stirrer motor"); }
 void stopStirrer() { Serial.println(">>> ACTION: Stopping stirrer motor"); }
 void openDrain() { Serial.println(">>> ACTION: Opening drain actuator"); }
 void closeDrain() { Serial.println(">>> ACTION: Closing drain actuator"); }
+void openWaterValve() { Serial.println(">>> ACTION: Opening water valve"); }
+void closeWaterValve() { Serial.println(">>> ACTION: Closing water valve"); }
+void dropRiceIntoCooker() { Serial.println(">>> ACTION: Dropping rice into pot"); }
 
-// *** CRITICAL NOTE: You need actuators for water and dropping rice! ***
-// You didn't list these, but your process requires them.
-void openWaterValve() { Serial.println(">>> ACTION: Opening water valve (ASSUMED HARDWARE)"); }
-void closeWaterValve() { Serial.println(">>> ACTION: Closing water valve (ASSUMED HARDWARE)"); }
-void dropRiceIntoCooker() { Serial.println(">>> ACTION: Dropping rice into pot (ASSUMED HARDWARE)"); }
-
-
-// --- Sensors ---
+// --- Washing Basin (Sensors) ---
 float getRiceWeight() { Serial.println(">>> SENSOR: Reading pressure sensor"); return 150.0; /* 150g */ }
 float getWaterLevel() { Serial.println(">>> SENSOR: Reading moisture sensor"); return 2.0; /* 2cm */ }
 
-
-// === 3. ESP-NOW FUNCTIONS ===
-esp_now_peer_info_t peerInfo;
-struct_message messageToSend;
-struct_message messageToReceive;
-
-void sendCommandToBottom(CommandType cmd) {
-  messageToSend.command = cmd;
-  esp_err_t result = esp_now_send(bottomEsp32Address, (uint8_t *) &messageToSend, sizeof(messageToSend));
-  if (result != ESP_OK) { Serial.println("Error sending command to Bottom"); }
+// --- Cooker (Actuator) ---
+void pressCookerButton() {
+  Serial.println(">>> ACTION: Pressing cook button servo...");
+  // TODO: Add your servo code here
+  // myCookServo.write(90); delay(500); myCookServo.write(0);
 }
 
+
+// === 4. ESP-NOW FUNCTIONS ===
+struct_message messageToReceive;
+
+// Callback when data is received from Controller
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   memcpy(&messageToReceive, incomingData, sizeof(messageToReceive));
-  Serial.print("Reply Received from Bottom: ");
+  Serial.print("Command Received: ");
 
   switch (messageToReceive.command) {
-    case CMD_MANUAL_BUTTON_PRESSED:
-      Serial.println("CMD_MANUAL_BUTTON_PRESSED");
+    case CMD_START_PROCESS:
+      Serial.println("CMD_START_PROCESS");
       startCookingProcess(); // Trigger the main process
       break;
-    case CMD_COOK_BUTTON_ACK:
-      Serial.println("CMD_COOK_BUTTON_ACK");
-      // Bottom confirms button was pressed. We can move to the final state.
-      if (currentState == STARTING_COOKER) {
-        currentState = PROCESS_COMPLETE;
-      }
+    
+    case CMD_SELECT_RICE_TYPE:
+      targetRiceType = messageToReceive.value;
+      Serial.printf("Setting rice type to %d\n", targetRiceType);
+      break;
+
+    case CMD_SET_PORTION:
+      targetPortionGrams = (float)messageToReceive.value;
+      Serial.printf("Setting portion to %.0fg\n", targetPortionGrams);
+      break;
+    
+    case CMD_PAUSE_PROCESS:
+      Serial.println("CMD_PAUSE_PROCESS");
+      // TODO: Add logic to pause
+      // currentState = PAUSED;
       break;
   }
 }
 
-// === 4. MAIN PROCESS LOGIC (THE STATE MACHINE) ===
+// === 5. MAIN PROCESS LOGIC (THE STATE MACHINE) ===
 
-// This is called by the web app OR the manual button
+// This is called by the remote
 void startCookingProcess() {
   if (currentState == IDLE) {
     Serial.println("===== STARTING NEW COOKING PROCESS =====");
+    Serial.printf("Target: %.0fg of rice type %d\n", targetPortionGrams, targetRiceType);
     currentState = DISPENSING_RICE;
     washCycleCounter = 0;
   } else {
@@ -92,14 +100,14 @@ void startCookingProcess() {
 // ---- STATE 1: DISPENSE RICE ----
 void handleDispensingState() {
   Serial.println("--- State: DISPENSING_RICE ---");
-  openSilo(1); // Example: use silo 1
+  openSilo(targetRiceType); // Use the correct silo
   
   // TODO: This should be non-blocking, but for a skeleton:
-  while (getRiceWeight() < 150.0) { // Target: 150g
+  while (getRiceWeight() < targetPortionGrams) {
     delay(100);
   }
   
-  closeSilo(1);
+  closeSilo(targetRiceType);
   Serial.println("Rice dispensed.");
   currentState = WASHING_CYCLE; // Move to next state
 }
@@ -111,9 +119,7 @@ void handleWashingState() {
   // 1. Fill
   Serial.println("Filling with water...");
   openWaterValve();
-  while (getWaterLevel() < 3.0) { // Target: 3cm
-    delay(100);
-  }
+  while (getWaterLevel() < 3.0) { delay(100); } // Target: 3cm
   closeWaterValve();
 
   // 2. Stir
@@ -125,19 +131,16 @@ void handleWashingState() {
   // 3. Drain
   Serial.println("Draining...");
   openDrain();
-  while (getWaterLevel() > 0.5) { // Wait until empty
-    delay(100);
-  }
+  while (getWaterLevel() > 0.5) { delay(100); } // Wait until empty
   closeDrain();
   Serial.println("Drain complete.");
 
   // 4. Check if done
   washCycleCounter++;
   if (washCycleCounter >= MAX_WASH_CYCLES) {
-    currentState = FINAL_FILL; // Done washing, move to next state
-  } else {
-    currentState = WASHING_CYCLE; // Loop back to this state
+    currentState = FINAL_FILL; // Done washing
   }
+  // else: loop will run this state again
 }
 
 // ---- STATE 3: FINAL WATER FILL ----
@@ -145,9 +148,12 @@ void handleFinalFillState() {
   Serial.println("--- State: FINAL_FILL ---");
   Serial.println("Adding final water for cooking...");
   openWaterValve();
+  
   // Use pressure sensor to get correct rice-to-water ratio
-  float targetWeight = getRiceWeight() * 2.5; // Example: 1:1.5 ratio by weight
-  while (getRiceWeight() < targetWeight) {
+  float currentWeight = getRiceWeight();
+  float finalWeight = currentWeight * 2.5; // Example: 1:1.5 water ratio (Total = 1 part rice + 1.5 parts water)
+  
+  while (getRiceWeight() < finalWeight) {
     delay(100);
   }
   closeWaterValve();
@@ -158,7 +164,7 @@ void handleFinalFillState() {
 // ---- STATE 4: DROP RICE ----
 void handleDropRiceState() {
   Serial.println("--- State: DROP_RICE_TO_POT ---");
-  dropRiceIntoCooker(); // This is your assumed mechanism
+  dropRiceIntoCooker(); // This is your mechanism
   delay(5000); // Give it 5s to drop
   Serial.println("Rice dropped into cooker.");
   currentState = STARTING_COOKER; // Move to next state
@@ -167,10 +173,10 @@ void handleDropRiceState() {
 // ---- STATE 5: START COOKER ----
 void handleStartCookerState() {
   Serial.println("--- State: STARTING_COOKER ---");
-  Serial.println("Sending command to Bottom ESP32 to press cook button...");
-  sendCommandToBottom(CMD_PRESS_COOK_BUTTON);
-  // The state will be changed to PROCESS_COMPLETE by the OnDataRecv
-  // function when it gets the ACK.
+  pressCookerButton();
+  delay(1000); // Wait 1s for servo
+  Serial.println("Cooker started.");
+  currentState = PROCESS_COMPLETE; // Move to final state
 }
 
 // ---- STATE 6: COMPLETE ----
@@ -180,32 +186,27 @@ void handleCompleteState() {
   currentState = IDLE;
 }
 
-// === 5. SETUP & LOOP ===
+// === 6. SETUP & LOOP ===
 
 void setup() {
   Serial.begin(115200);
   
-  // Set device as a Wi-Fi Station (needed for ESP-NOW & Web App)
+  // Set device as a Wi-Fi Station
   WiFi.mode(WIFI_STA);
-  // TODO: Add your WiFi.begin(ssid, password) here for the web app
-  
+  // NOTE: You can ALSO connect to your home Wi-Fi here if you
+  // still want the web app functionality. ESP-NOW and Wi-Fi
+  // can run at the same time.
+  // WiFi.begin(ssid, password);
+
   // Init ESP-NOW
   if (esp_now_init() != ESP_OK) {
     Serial.println("Error initializing ESP-NOW");
     return;
   }
-  // Register peer (Bottom ESP32)
-  memcpy(peerInfo.peer_addr, bottomEsp32Address, 6);
-  peerInfo.channel = 0;  
-  peerInfo.encrypt = false;
-  if (esp_now_add_peer(&peerInfo) != OK) {
-    Serial.println("Failed to add peer");
-    return;
-  }
-  // Register receive callback
+  
+  // Register the receive callback
   esp_now_register_recv_cb(OnDataRecv);
-
-  Serial.println("Top ESP32 (Main) Ready.");
+  Serial.println("Main ESP32 (Machine) Ready and listening.");
 }
 
 void loop() {
@@ -233,11 +234,6 @@ void loop() {
       handleCompleteState();
       break;
   }
-
-  // TODO: Add your web app check here
-  // e.g., if (webApp.commandReceived() == "start") {
-  //   startCookingProcess();
-  // }
   
   delay(100); // Main loop delay
 }
